@@ -72,6 +72,9 @@ import java.util.ArrayList;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import static spark.Spark.halt;
 
 /**
@@ -331,6 +334,102 @@ public class Routes {
             return e.getMessage();
         }
         return Constants.SUCCESS;
+    }
+
+    /**
+     * Get the user query and generate json response.
+     *
+     * @param request  User request
+     * @param response Anomaly detector response
+     * @return Json with status, error and anomalies detected if any
+     */
+    public static JSONObject processRbInstantAnomalyJob(Request request, Response response) {
+        log.info("Getting user query from request.");
+        Map<String, Object> params = new HashMap<>(defaultParams);
+        Map<String, Object> tableParams = new HashMap<>(defaultParams);
+
+        JSONObject responseMsg = new JSONObject();
+
+        params.put(Constants.TITLE, "Anomaly Report");
+        try {
+            UserQuery userQuery = new Gson().fromJson(request.body(), UserQuery.class);
+            // regenerate user query
+            Granularity granularity = Granularity.getValue(userQuery.getGranularity());
+            Integer granularityRange = userQuery.getGranularityRange();
+            Integer hoursOfLag = clusterAccessor.getDruidCluster(userQuery.getClusterId().toString()).getHoursOfLag();
+            Integer intervalEndTime;
+            ZonedDateTime endTime = TimeUtils.parseDateTime(userQuery.getQueryEndTimeText());
+            if (ZonedDateTime.now(ZoneOffset.UTC).minusHours(hoursOfLag).toEpochSecond() < endTime.toEpochSecond()) {
+                intervalEndTime = granularity.getEndTimeForInterval(endTime.minusHours(hoursOfLag));
+            } else {
+                intervalEndTime = granularity.getEndTimeForInterval(endTime);
+            }
+            Query query = serviceFactory.newDruidQueryServiceInstance().build(userQuery.getQuery(), granularity, granularityRange, intervalEndTime, userQuery.getTimeseriesRange());
+            JobMetadata job = new JobMetadata(userQuery, query);
+            job.setFrequency(granularity.toString());
+            job.setEffectiveQueryTime(intervalEndTime);
+            DetectorConfig config = DetectorConfig.fromProperties(DetectorConfig.fromFile());
+            config.setTsModel(userQuery.getTsModels());
+            config.setAdModel(userQuery.getAdModels());
+            if (userQuery.getTsFramework().equals(DetectorConfig.Framework.Prophet.toString())) {
+                config.setTsFramework(DetectorConfig.Framework.Prophet.toString());
+                config.setProphetGrowthModel(userQuery.getGrowthModel());
+                config.setProphetYearlySeasonality(userQuery.getYearlySeasonality());
+                config.setProphetWeeklySeasonality(userQuery.getWeeklySeasonality());
+                config.setProphetDailySeasonality(userQuery.getDailySeasonality());
+                log.info("DetectorConfig reconstructed with Prophet parameters.");
+            } else {
+                config.setTsFramework(DetectorConfig.Framework.Egads.toString());
+                log.info("DetectorConfig reconstructed with Egads parameters.");
+            }
+            // detect anomalies
+            List<DetectorResult> detectorResult = serviceFactory.newDetectorServiceInstance().detectWithResults(
+                    query,
+                    job.getSigmaThreshold(),
+                    clusterAccessor.getDruidCluster(job.getClusterId()),
+                    userQuery.getDetectionWindow(),
+                    config
+            );
+            // results
+            List<Anomaly> anomalies = new ArrayList<>();
+            List<ImmutablePair<Integer, String>> timeseriesNames = new ArrayList<>();
+            int i = 0;
+            for (DetectorResult result : detectorResult) {
+                anomalies.addAll(result.getAnomalies());
+                timeseriesNames.add(new ImmutablePair<>(i++, result.getBaseName()));
+            }
+            JSONArray anomaliesWithFormat = new JSONArray();
+            for (Anomaly anomaly : anomalies) {
+                for (Anomaly.Interval interval: anomaly.intervals) {
+                    String format = "yyyy-MM-dd'T'HH:mm:ssX";
+                    String startStr = TimeUtils.getTimeFromSeconds(interval.startTime, format);
+                    JSONObject anomalyWithFormat = new JSONObject();
+                    anomalyWithFormat.put("timestamp", startStr);
+                    anomalyWithFormat.put("expected", interval.expectedVal);
+                    anomaliesWithFormat.put(anomalyWithFormat);
+                }
+            }
+            responseMsg.put("anomalies", anomaliesWithFormat);
+            
+        } catch (IOException | ClusterNotFoundException | DruidException | SherlockException e) {
+            log.error("Error while processing instant job!", e);
+            params.put(Constants.ERROR, e.toString());
+
+            responseMsg.put("status", Constants.ERROR);
+            responseMsg.put("error", e.toString());
+            return responseMsg;
+        } catch (Exception e) {
+            log.error("Unexpected error!", e);
+            params.put(Constants.ERROR, e.toString());
+
+            responseMsg.put("status", Constants.ERROR);
+            responseMsg.put("error", e.toString());
+            return responseMsg;
+        }
+
+        responseMsg.put("status", Constants.SUCCESS);
+        responseMsg.put("error", "false");
+        return responseMsg;
     }
 
     /**

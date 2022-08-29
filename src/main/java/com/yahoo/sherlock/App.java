@@ -136,7 +136,9 @@ class App {
         config.setAuthorizer(new CsrfAuthorizer());
         config.setClients(new Clients(AnonymousClient.INSTANCE));
 
-        before("/*", new SecurityFilter(config, null, Constants.CSRF + Constants.COMMA_DELIMITER + Constants.XSS_PROTECTION));
+        if (CLISettings.DISABLE_SECURITY_FILTER == false) {
+            before("/*", new SecurityFilter(config, null, Constants.CSRF + Constants.COMMA_DELIMITER + Constants.XSS_PROTECTION));
+        }
 
         // Home Page
         get("/sherlock", Routes::viewHomePage, thymeleafTemplateEngine);
@@ -155,6 +157,9 @@ class App {
 
         // Route to get instant anomaly-detection report
         get("/Flash-Query/ProcessAnomalyReport", Routes::getInstantAnomalyJob, thymeleafTemplateEngine);
+
+        // Route for instant anomaly-detection on user input query
+        post("/Rb-Query/ProcessRbInstantAnomalyJob", Routes::processRbInstantAnomalyJob);
 
         // Route for viewing deleted jobs
         get("/DeletedJobs", Routes::viewDeletedJobsList, thymeleafTemplateEngine);

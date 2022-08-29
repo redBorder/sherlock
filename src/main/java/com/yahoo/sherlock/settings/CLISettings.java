@@ -204,6 +204,12 @@ public class CLISettings {
     public static boolean DEBUG_MODE = false;
 
     /**
+     * Whether disable security filter on routes.
+     */
+    @Parameter(names = "--disable-security-filter", description = "Set to true to disable security filter on routes")
+    public static boolean DISABLE_SECURITY_FILTER = false;
+
+    /**
      * The Project name to display on UI.
      */
     @Parameter(names = "--timeseries-completeness", description = "This defines minimum fraction of datapoints needed in the timeseries to consider it as a valid timeseries o/w sherlock ignores such timeseries. (default value 60 i.e. 0.6 in fraction)")
