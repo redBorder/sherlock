@@ -105,6 +105,12 @@ public class UserQuery {
     /** Meta Prophet's daily seasonality parameter ("auto"/"true"/"false"). */
     private String dailySeasonality;
 
+    /** RB: Druid Host to make the query. */
+    private String brokerHost;
+
+    /** RB: Druid Broker Port to make the query. */
+    private Integer brokerPort;
+
     /**
      * Removing duplicate emails and return set of comma separated emails.
      * @return comma separated set of emails

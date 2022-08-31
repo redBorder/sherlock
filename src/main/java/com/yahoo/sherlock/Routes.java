@@ -270,6 +270,7 @@ public class Routes {
         Map<String, Object> tableParams = new HashMap<>(defaultParams);
         params.put(Constants.TITLE, "Anomaly Report");
         try {
+            log.info("request.body() -> {}", request.body());
             UserQuery userQuery = new Gson().fromJson(request.body(), UserQuery.class);
             // regenerate user query
             Granularity granularity = Granularity.getValue(userQuery.getGranularity());
@@ -337,22 +338,72 @@ public class Routes {
     }
 
     /**
-     * Get the user query and generate json response.
+     * Get the user query, makes a DruidCluster with the brokerHost if needed,
+     * process the anomalyJob and return the anomalies as json.
      *
      * @param request  User request
      * @param response Anomaly detector response
-     * @return Json with status, error and anomalies detected if any
+     * @return answer Json with status, error and an array of anomalies detected
      */
     public static JSONObject processRbInstantAnomalyJob(Request request, Response response) {
         log.info("Getting user query from request.");
         Map<String, Object> params = new HashMap<>(defaultParams);
         Map<String, Object> tableParams = new HashMap<>(defaultParams);
 
-        JSONObject responseMsg = new JSONObject();
+        JSONObject answer = new JSONObject();
 
         params.put(Constants.TITLE, "Anomaly Report");
         try {
+            log.info("request.body() -> {}", request.body());
+            
+            // original UserQuery POJO was modified to add brokerHost and brokerPort
+            // to get these parameters from the request in a cleaner way
             UserQuery userQuery = new Gson().fromJson(request.body(), UserQuery.class);
+            String brokerHost = userQuery.getBrokerHost();
+            Integer brokerPort = userQuery.getBrokerPort();
+
+            // gets the clusterId from the brokerHost
+            if ((brokerHost != null) && (brokerPort != null)) {
+                Integer clusterId = null;
+
+                // search druidCluster by brokerHost to get the clusterId
+                for (DruidCluster druidCluster : clusterAccessor.getDruidClusterList()) {
+                    if (druidCluster.getBrokerHost().equals(brokerHost)) {
+                        clusterId = druidCluster.getClusterId();
+                    }
+                }
+
+                // if clusterId was not found makes a new DruidCluster
+                if (clusterId == null) {
+                    log.info("The cluster was not found, lets make it!");
+
+                    // makes new DruidCluster form brokerHost and brokerPort
+                    DruidCluster cluster = new DruidCluster();
+                    cluster.setClusterId(clusterId);
+                    cluster.setBrokerHost(brokerHost);
+                    cluster.setBrokerPort(brokerPort);
+                    cluster.setBrokerEndpoint("druid/v2");
+                    cluster.setClusterName(brokerHost);
+                    cluster.setHoursOfLag(0);
+                    cluster.setClusterDescription("");
+                    clusterAccessor.putDruidCluster(cluster);
+                    
+                    // search druidCluster by brokerHost to get the clusterId
+                    for (DruidCluster druidCluster : clusterAccessor.getDruidClusterList()) {
+                        if (druidCluster.getBrokerHost().equals(brokerHost)) {
+                            clusterId = druidCluster.getClusterId();
+                        }
+                    }
+                }
+
+                // if the search or creation of the new DruidCluster was successfull
+                // then overwrite the original clusterId from the userQuery
+                if (clusterId != null) {
+                    log.info("Setting clusterId to {}", clusterId);
+                    userQuery.setClusterId(clusterId);
+                }
+            }
+
             // regenerate user query
             Granularity granularity = Granularity.getValue(userQuery.getGranularity());
             Integer granularityRange = userQuery.getGranularityRange();
@@ -398,38 +449,44 @@ public class Routes {
                 anomalies.addAll(result.getAnomalies());
                 timeseriesNames.add(new ImmutablePair<>(i++, result.getBaseName()));
             }
-            JSONArray anomaliesWithFormat = new JSONArray();
+
+            // build an array of anomalies with its timestamp and expected values
+            // like [{"timestamp": <timestamp>, "expected": <aggregation>}]
+            JSONArray anomaliesWithExpectedValues = new JSONArray();
             for (Anomaly anomaly : anomalies) {
                 for (Anomaly.Interval interval: anomaly.intervals) {
                     String format = "yyyy-MM-dd'T'HH:mm:ssX";
                     String startStr = TimeUtils.getTimeFromSeconds(interval.startTime, format);
-                    JSONObject anomalyWithFormat = new JSONObject();
-                    anomalyWithFormat.put("timestamp", startStr);
-                    anomalyWithFormat.put("expected", interval.expectedVal);
-                    anomaliesWithFormat.put(anomalyWithFormat);
+                    JSONObject anomalyWithExpectedValue = new JSONObject();
+                    anomalyWithExpectedValue.put("timestamp", startStr);
+                    anomalyWithExpectedValue.put("expected", interval.expectedVal);
+                    anomaliesWithExpectedValues.put(anomalyWithExpectedValue);
                 }
             }
-            responseMsg.put("anomalies", anomaliesWithFormat);
+            answer.put("anomalies", anomaliesWithExpectedValues);
             
         } catch (IOException | ClusterNotFoundException | DruidException | SherlockException e) {
             log.error("Error while processing instant job!", e);
             params.put(Constants.ERROR, e.toString());
 
-            responseMsg.put("status", Constants.ERROR);
-            responseMsg.put("error", e.toString());
-            return responseMsg;
+            answer.put("status", Constants.ERROR);
+            answer.put("error", e.toString());
+            log.info("ERROR 1: answer -> {}", answer);
+            return answer;
         } catch (Exception e) {
             log.error("Unexpected error!", e);
             params.put(Constants.ERROR, e.toString());
 
-            responseMsg.put("status", Constants.ERROR);
-            responseMsg.put("error", e.toString());
-            return responseMsg;
+            answer.put("status", Constants.ERROR);
+            answer.put("error", e.toString());
+            log.info("ERROR 2: answer -> {}", answer);
+            return answer;
         }
 
-        responseMsg.put("status", Constants.SUCCESS);
-        responseMsg.put("error", "false");
-        return responseMsg;
+        answer.put("status", Constants.SUCCESS);
+        answer.put("error", "false");
+        log.info("OK: answer -> {}", answer);
+        return answer;
     }
 
     /**
