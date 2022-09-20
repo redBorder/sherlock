@@ -11,6 +11,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.reflect.TypeToken;
 import com.yahoo.egads.data.Anomaly;
+import com.yahoo.egads.data.TimeSeries;
 import com.yahoo.sherlock.enums.Granularity;
 import com.yahoo.sherlock.enums.JobStatus;
 import com.yahoo.sherlock.enums.Triggers;
@@ -69,6 +70,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -443,19 +445,22 @@ public class Routes {
             );
             // results
             List<Anomaly> anomalies = new ArrayList<>();
+            TimeSeries.DataSequence predicted = new TimeSeries.DataSequence();
+
             List<ImmutablePair<Integer, String>> timeseriesNames = new ArrayList<>();
             int i = 0;
             for (DetectorResult result : detectorResult) {
                 anomalies.addAll(result.getAnomalies());
+                predicted.addAll(result.getForecasted());
                 timeseriesNames.add(new ImmutablePair<>(i++, result.getBaseName()));
             }
 
             // build an array of anomalies with its timestamp and expected values
             // like [{"timestamp": <timestamp>, "expected": <aggregation>}]
+            String format = "yyyy-MM-dd'T'HH:mm:ssX";
             JSONArray anomaliesWithExpectedValues = new JSONArray();
             for (Anomaly anomaly : anomalies) {
                 for (Anomaly.Interval interval: anomaly.intervals) {
-                    String format = "yyyy-MM-dd'T'HH:mm:ssX";
                     String startStr = TimeUtils.getTimeFromSeconds(interval.startTime, format);
                     JSONObject anomalyWithExpectedValue = new JSONObject();
                     anomalyWithExpectedValue.put("timestamp", startStr);
@@ -464,7 +469,17 @@ public class Routes {
                 }
             }
             answer.put("anomalies", anomaliesWithExpectedValues);
-            
+
+            JSONArray predictedWithExpectedValues = new JSONArray();
+            for (TimeSeries.Entry entry : predicted) {
+                String startStr = TimeUtils.getTimeFromSeconds(entry.time, format);
+                JSONObject predictedWithExpectedValue = new JSONObject();
+                predictedWithExpectedValue.put("timestamp", startStr);
+                predictedWithExpectedValue.put("forecast", entry.value);
+                predictedWithExpectedValues.put(predictedWithExpectedValue);
+            }
+            answer.put("predicted", predictedWithExpectedValues);
+
         } catch (IOException | ClusterNotFoundException | DruidException | SherlockException e) {
             log.error("Error while processing instant job!", e);
             params.put(Constants.ERROR, e.toString());
